@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tsp-onetree-inference"
+version = "1.0.0"
+description = "Inference pipeline for the 1-tree GNN + LKH-3 TSP solver."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.23",
+]
+
+[tool.setuptools]
+packages = ["tsp_onetree", "pipeline", "data_gen"]
