@@ -93,12 +93,47 @@ strongest LKH numbers in the paper at every tested size.
 
 `checkpoints/c2tsp_tsp100/` contains:
 
-- `model.pt` — PyTorch state dict (~524 KB, 123,750 parameters).
+- `model.pt` — PyTorch state dict (~524 KB, ~123 k parameters).
 - `run_config.json` — hyperparameters needed to reconstruct the architecture.
 
 **Trained only on TSP100** (paper §3) and applied zero-shot to every test
 size (TSP50, TSP100, TSP200, TSP500, TSP1000, TSP2000). No checkpoint
 swapping or fine-tuning between sizes.
+
+The architecture and training-side hyperparameters in `run_config.json` are
+read by `pipeline.run_lkh` / `pipeline.run_decode` via
+`inspect.signature(TSPEntropicOneTreeModel.__init__)`, so adding new model
+kwargs in a future release does not require updating the pipeline scripts.
+
+### Reproducing paper Table 2 (LKH integration)
+
+Per-`n` LKH knobs used in the paper (mirrored from the internal sweep
+`scripts/run_v21_eval.py`):
+
+| n | `--time_limit_s` | `--num_samples` (Gumbel K) | `--max_trials` |
+|---|---|---|---|
+| 50    | 30   | 8   | 50    |
+| 100   | 60   | 16  | 100   |
+| 200   | 120  | 32  | 200   |
+| 500   | 300  | 64  | 500   |
+| 1000  | 600  | 128 | 1000  |
+| 2000  | 1200 | 128 | 2000  |
+
+Other defaults are identical to the CLI defaults of `pipeline.run_lkh`
+(`--gumbel_scale 0.20`, `--cand_knn 20`, `--cand_top_k 5`,
+`--cand_max_candidates 5`, `--runs 1`, `--seed 12345`).
+
+Example for the TSP100 row of Table 2:
+
+```bash
+python -m pipeline.run_lkh \
+  --run_dir checkpoints/c2tsp_tsp100 \
+  --dataset path/to/tsp100_test_concorde.txt \
+  --lkh_bin /absolute/path/to/LKH \
+  --levels H0,H1,H2,H3,H4 \
+  --time_limit_s 60 --num_samples 16 --max_trials 100 \
+  --output_json runs/tsp100_table2.json
+```
 
 ## Dataset format
 

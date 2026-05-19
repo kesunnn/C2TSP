@@ -36,10 +36,10 @@ import numpy as np
 import torch
 
 from tsp_onetree.data import ConcordeTSPDataset
-from tsp_onetree.model_v19 import TSPEntropicOneTreeModel, decode_tours_ablation
+from tsp_onetree.model import TSPEntropicOneTreeModel
+from tsp_onetree.decode import decode_tours_ablation
 
-# Reuse the (large) MODEL_CTOR_KEYS list from the LKH pipeline to stay in sync.
-from pipeline.run_lkh import MODEL_CTOR_KEYS, _load_model
+from pipeline.run_lkh import _load_model
 
 
 DECODE_LEVELS = ("L1", "L2x1", "L2x10", "L2x100", "L3", "L4")

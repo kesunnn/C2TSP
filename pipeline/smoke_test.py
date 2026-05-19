@@ -21,33 +21,9 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 import torch
 
 from tsp_onetree.data import ConcordeTSPDataset
-from tsp_onetree.model_v19 import TSPEntropicOneTreeModel
+from tsp_onetree.model import TSPEntropicOneTreeModel
 
-
-MODEL_CTOR_KEYS = [
-    "node_dim", "edge_dim", "num_gnn_layers", "beta", "tau", "prior_weight",
-    "candidate_k", "non_candidate_penalty", "lam_iters", "lam_tol", "lam_step",
-    "ift_ridge", "loss_mode", "entropy_weight", "deg_penalty_weight",
-    "resid_penalty_weight", "bern_penalty_weight", "logit_clamp", "root",
-    "ift_backward_tol", "inner_homotopy", "inner_tau_start", "inner_tau_mid",
-    "inner_final_frac", "cov_shrink", "lm_damping", "detach_refine_state",
-    "round2_use_struct_gate", "round2_gate_detach_features",
-    "round2_gate_hidden_dim", "round2_struct_gate_floor",
-    "round2_struct_gate_temp", "round2_struct_bonus",
-    "stage2_struct_target", "stage2_struct_linear_weight",
-    "stage2_struct_quad_weight", "stage2_struct_uncertainty_weight",
-    "stage2_entropy_penalty_weight", "nontour_entropy_weight",
-    "stage2_objective_mode", "stage2_bound_weight", "round0_loss_weight",
-    "sharpen_beta", "cert_alpha", "var_tilt_weight",
-    "stage2_coupled_steps", "stage2_coupled_damping",
-    "edge_head_with_cost", "edge_hidden_mult",
-]
-
-
-def _build_model_from_args(ckpt_args: dict) -> TSPEntropicOneTreeModel:
-    kwargs = {k: ckpt_args[k] for k in MODEL_CTOR_KEYS if k in ckpt_args}
-    kwargs["gradient_checkpoint"] = bool(ckpt_args.get("gradient_checkpoint", 0))
-    return TSPEntropicOneTreeModel(**kwargs)
+from pipeline.run_lkh import _build_model_from_args as _build_model
 
 
 def _pick_device(preferred: str) -> torch.device:
@@ -92,11 +68,17 @@ def main() -> int:
     print(f"[smoke] checkpoint = {ckpt_path}")
     print(f"[smoke] dataset    = {args.dataset}")
 
-    model = _build_model_from_args(ckpt_args).to(device)
+    model = _build_model(ckpt_args, device)
     state = torch.load(ckpt_path, map_location=device, weights_only=True)
-    missing, unexpected = model.load_state_dict(state, strict=True)
+    if isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    missing, unexpected = model.load_state_dict(state, strict=False)
     print(f"[smoke] state_dict loaded; missing={len(missing) if missing else 0} "
           f"unexpected={len(unexpected) if unexpected else 0}")
+    if missing:
+        print(f"[smoke]   first missing keys: {missing[:5]}")
+    if unexpected:
+        print(f"[smoke]   first unexpected keys: {unexpected[:5]}")
     model.eval()
 
     dataset = ConcordeTSPDataset(path=args.dataset, take=int(args.take))

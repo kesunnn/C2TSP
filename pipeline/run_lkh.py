@@ -33,6 +33,7 @@ Per-instance timing breakdown:
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import re
@@ -48,28 +49,8 @@ import numpy as np
 import torch
 
 from tsp_onetree.data import ConcordeTSPDataset
-from tsp_onetree.model_v19 import TSPEntropicOneTreeModel
+from tsp_onetree.model import TSPEntropicOneTreeModel
 from pipeline import lkh_integration as L
-
-
-MODEL_CTOR_KEYS = [
-    "node_dim", "edge_dim", "num_gnn_layers", "beta", "tau", "prior_weight",
-    "candidate_k", "non_candidate_penalty", "lam_iters", "lam_tol", "lam_step",
-    "ift_ridge", "loss_mode", "entropy_weight", "deg_penalty_weight",
-    "resid_penalty_weight", "bern_penalty_weight", "logit_clamp", "root",
-    "ift_backward_tol", "inner_homotopy", "inner_tau_start", "inner_tau_mid",
-    "inner_final_frac", "cov_shrink", "lm_damping", "detach_refine_state",
-    "round2_use_struct_gate", "round2_gate_detach_features",
-    "round2_gate_hidden_dim", "round2_struct_gate_floor",
-    "round2_struct_gate_temp", "round2_struct_bonus",
-    "stage2_struct_target", "stage2_struct_linear_weight",
-    "stage2_struct_quad_weight", "stage2_struct_uncertainty_weight",
-    "stage2_entropy_penalty_weight", "nontour_entropy_weight",
-    "stage2_objective_mode", "stage2_bound_weight", "round0_loss_weight",
-    "sharpen_beta", "cert_alpha", "var_tilt_weight",
-    "stage2_coupled_steps", "stage2_coupled_damping",
-    "edge_head_with_cost", "edge_hidden_mult",
-]
 
 
 _TRIAL_RE = re.compile(r"\*\s+(\d+):\s+Cost\s*=\s*(-?\d+)")
@@ -81,13 +62,40 @@ NEEDS_CAND = {"H2", "H3", "H4"}
 NEEDS_LAMBDA = {"H3", "H4"}
 
 
+def _build_model_from_args(args_dict: dict, device: torch.device) -> TSPEntropicOneTreeModel:
+    """Build the model from a saved run_config.json["args"] dict.
+
+    Pulls every kwarg whose name appears in `TSPEntropicOneTreeModel.__init__`,
+    so it transparently picks up new params added in the paper checkpoint
+    (stage2_steps, edge_quotient_projection, disable_stage2_gnn_forward, ...).
+    """
+    sig = inspect.signature(TSPEntropicOneTreeModel.__init__)
+    kw: dict[str, Any] = {}
+    for name in sig.parameters:
+        if name == "self":
+            continue
+        if name in args_dict:
+            kw[name] = args_dict[name]
+    if int(kw.get("node_dim", 0)) == 0 and "edge_dim" in kw:
+        kw["node_dim"] = kw["edge_dim"]
+    kw["gradient_checkpoint"] = False  # don't checkpoint at eval
+    model = TSPEntropicOneTreeModel(**kw).to(device)
+    return model
+
+
 def _load_model(run_dir: Path, device: torch.device) -> tuple[TSPEntropicOneTreeModel, dict]:
     cfg = json.loads((run_dir / "run_config.json").read_text())["args"]
-    kw = {k: cfg[k] for k in MODEL_CTOR_KEYS if k in cfg}
-    kw["gradient_checkpoint"] = bool(cfg.get("gradient_checkpoint", 0))
-    model = TSPEntropicOneTreeModel(**kw).to(device)
+    model = _build_model_from_args(cfg, device)
     state = torch.load(run_dir / "model.pt", map_location=device, weights_only=True)
-    model.load_state_dict(state)
+    if isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        print(f"[pipeline] load_state_dict: {len(missing)} missing keys "
+              f"(first 5): {missing[:5]}")
+    if unexpected:
+        print(f"[pipeline] load_state_dict: {len(unexpected)} unexpected keys "
+              f"(first 5): {unexpected[:5]}")
     model.eval()
     return model, cfg
 

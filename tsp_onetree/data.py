@@ -1,7 +1,26 @@
+import math
 from typing import Tuple
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
+
+class TSPDataset(Dataset):
+    """Random Euclidean TSP instances in [0,1]^2."""
+
+    def __init__(self, num_instances: int, num_cities: int, seed: int = 0):
+        rng = np.random.RandomState(seed)
+        self.coords = torch.tensor(
+            rng.uniform(size=(num_instances, num_cities, 2)), dtype=torch.float32
+        )
+        diff = self.coords.unsqueeze(2) - self.coords.unsqueeze(1)
+        self.dist_matrices = diff.norm(dim=-1)
+
+    def __len__(self):
+        return self.coords.shape[0]
+
+    def __getitem__(self, idx):
+        return self.coords[idx], self.dist_matrices[idx]
 
 
 def _euclidean_dist_matrix(coords: torch.Tensor) -> torch.Tensor:
@@ -37,9 +56,11 @@ def _parse_concorde_line(line: str) -> Tuple[torch.Tensor, torch.Tensor]:
         raise ValueError(f"Tour token count {len(tour_toks)} shorter than num cities {n}.")
     tour = torch.tensor([int(x) for x in tour_toks], dtype=torch.long)
 
+    # Convert 1-indexed tours to 0-indexed if needed.
     if int(tour.min().item()) >= 1:
         tour = tour - 1
 
+    # Drop repeated closing node if present.
     if len(tour) >= n + 1 and int(tour[0].item()) == int(tour[-1].item()):
         tour = tour[:-1]
 
@@ -49,13 +70,13 @@ def _parse_concorde_line(line: str) -> Tuple[torch.Tensor, torch.Tensor]:
 
 
 class ConcordeTSPDataset(Dataset):
-    """File-backed dataset for Concorde-labeled Euclidean TSP instances."""
+    """File-backed dataset for official Concorde-labeled Euclidean TSP instances."""
 
     def __init__(self, path: str, take: int | None = None, skip: int = 0):
         self.path = path
-        self.coords = []
-        self.dist_matrices = []
-        self.opt_tours = []
+        self.coords: List[torch.Tensor] = []
+        self.dist_matrices: List[torch.Tensor] = []
+        self.opt_tours: List[torch.Tensor] = []
 
         with open(path, "r", encoding="utf-8") as f:
             lines = [ln.strip() for ln in f if ln.strip()]
@@ -83,3 +104,11 @@ class ConcordeTSPDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.coords[idx], self.dist_matrices[idx], self.opt_tours[idx]
+
+def cosine_anneal(epoch: int, start: float, end: float, total_epochs: int) -> float:
+    """Smoothly anneal a scalar from start to end over total_epochs."""
+    if total_epochs <= 1:
+        return float(end)
+    t = min(max(epoch - 1, 0), total_epochs - 1) / float(total_epochs - 1)
+    w = 0.5 * (1.0 + math.cos(math.pi * t))
+    return float(end + (start - end) * w)
