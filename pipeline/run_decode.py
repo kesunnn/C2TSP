@@ -8,7 +8,7 @@ optimality gaps for six decode levels matching paper Table 1:
   L2 x 10  : L1 + 2-opt local search (10 passes)
   L2 x 100 : L1 + 2-opt local search (100 passes)
   L3       : Gumbel perturbation of mu, best-of-M greedy decodes
-  L4       : MAP rooted 1-tree + backbone-insertion repair
+  L4       : best-of-M covariance-perturbed MAP rooted 1-tree + backbone-insertion repair
 
 Internally we call `decode_tours_ablation` once per requested twoopt-pass
 budget and read the relevant `raw_cost` / `lk_cost` entry. The portfolio
@@ -37,7 +37,7 @@ import torch
 
 from tsp_onetree.data import ConcordeTSPDataset
 from tsp_onetree.model import TSPEntropicOneTreeModel
-from tsp_onetree.decode import decode_tours_ablation
+from tsp_onetree.decode import decode_gumbel, decode_tours_ablation
 
 from pipeline.run_lkh import _load_model
 
@@ -62,7 +62,7 @@ def _twoopt_passes_for(level: str) -> int:
 
 
 def _extract_cost(out: dict, level: str, B: int) -> np.ndarray:
-    """Pick the right cost array from a decode_tours_ablation result for `level`."""
+    """Pick the right cost array from a decode result for `level`."""
     if level == "L1":
         return out["s1_mu_greedy"]["raw_cost"]
     if level.startswith("L2x"):
@@ -70,7 +70,7 @@ def _extract_cost(out: dict, level: str, B: int) -> np.ndarray:
     if level == "L3":
         return out["s4_gumbel_muM"]["raw_cost"]
     if level == "L4":
-        return out["s2_map_repair"]["raw_cost"]
+        return out["best_cost"]
     raise ValueError(f"Unknown decode level {level!r}")
 
 
@@ -102,6 +102,13 @@ def main() -> int:
     ap.add_argument("--num_gumbel_draws", type=int, default=20,
                     help="M for L3 (Gumbel perturbation best-of-M). Paper default = 20.")
     ap.add_argument("--gumbel_scale", type=float, default=0.20)
+    ap.add_argument("--l4_num_draws", type=int, default=0,
+                    help="M for L4 best-of-M covariance MAP-repair. "
+                    "If <= 0, reuses --num_gumbel_draws.")
+    ap.add_argument("--l4_noise_type", type=str, default="covariance",
+                    help="Noise type for L4 sampled MAP-repair.")
+    ap.add_argument("--l4_tau", type=float, default=0.20,
+                    help="Temperature used by covariance-based L4 noise.")
     ap.add_argument("--seed", type=int, default=12345)
     ap.add_argument("--device", type=str,
                     default="cuda:0" if torch.cuda.is_available() else "cpu")
@@ -169,7 +176,7 @@ def main() -> int:
         pair_prob = aux.get("pair_prob")
 
         # One decode_tours_ablation call per requested twoopt budget. For levels
-        # that don't depend on twoopt (L1/L3/L4 raw), the first call suffices.
+        # that don't depend on twoopt (L1/L3 raw), the first call suffices.
         for budget in needed_2opt:
             need_gumbel = ("L3" in levels)
             t1 = time.perf_counter()
@@ -196,9 +203,27 @@ def main() -> int:
                         or (level == "L2x10" and budget == 10)
                         or (level == "L2x100" and budget == 100)
                         or (level == "L3" and budget == needed_2opt[0])
-                        or (level == "L4" and budget == needed_2opt[0])
                     ):
                         cost_by_level[level][start:end] = _extract_cost(out, level, end - start)
+
+            if "L4" in levels and budget == needed_2opt[0]:
+                l4_draws = int(args.l4_num_draws) if int(args.l4_num_draws) > 0 else int(args.num_gumbel_draws)
+                t2 = time.perf_counter()
+                l4_out = decode_gumbel(
+                    mu, C_mod, cand_mask, dist_b,
+                    root=0,
+                    twoopt_passes=0,
+                    num_draws=l4_draws,
+                    gumbel_scale=float(args.gumbel_scale),
+                    seed_base=int(args.seed + start * 7919),
+                    use_lk_alpha=False,
+                    noise_type=str(args.l4_noise_type),
+                    tau=float(args.l4_tau),
+                    seed_split=0.0,
+                    use_mu_repair=False,
+                )
+                t_decode_total += time.perf_counter() - t2
+                cost_by_level["L4"][start:end] = _extract_cost(l4_out, "L4", end - start)
 
         print(f"[decode]   batch {start}/{B_total} done")
 
@@ -211,6 +236,9 @@ def main() -> int:
         "levels": levels,
         "num_gumbel_draws": int(args.num_gumbel_draws),
         "gumbel_scale": float(args.gumbel_scale),
+        "l4_num_draws": int(args.l4_num_draws) if int(args.l4_num_draws) > 0 else int(args.num_gumbel_draws),
+        "l4_noise_type": str(args.l4_noise_type),
+        "l4_tau": float(args.l4_tau),
         "seed": int(args.seed),
         "t_forward_total_s": float(t_forward_total),
         "t_decode_total_s": float(t_decode_total),
