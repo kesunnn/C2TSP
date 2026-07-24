@@ -5,12 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tsp-onetree-inference"
 version = "1.0.0"
-description = "Inference pipeline for the 1-tree GNN + LKH-3 TSP solver."
+description = "Training and inference pipeline for the connected-by-construction 1-tree GNN TSP solver."
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.0",
     "numpy>=1.23",
 ]
+
+[project.scripts]
+c2tsp-train = "tsp_onetree.cli:main"
 
 [tool.setuptools]
 packages = ["tsp_onetree", "pipeline", "data_gen"]

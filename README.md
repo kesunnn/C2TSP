@@ -8,11 +8,9 @@ matrix `μ` (and a node-dual vector `λ_nr`) that can either be **decoded
 directly into a tour** or used to **steer LKH-3** as a candidate-and-initial-
 tour oracle.
 
-This repository contains the **inference code**, a **pretrained checkpoint**,
-and **dataset-generation scripts** — enough to reproduce the headline
-numbers in Tables 1 and 2 of the paper. Training code, baseline
-comparisons, and pre-built test datasets are **not** included; see
-"Limitations" below.
+This repository contains training and inference code, a pretrained checkpoint,
+the matching training-time decoder, and the supplied Concorde-format TSP
+datasets. It supports model training, pure decoding, and LKH integration.
 
 ## Contents
 
@@ -105,6 +103,25 @@ read by `pipeline.run_lkh` / `pipeline.run_decode` via
 `inspect.signature(TSPEntropicOneTreeModel.__init__)`, so adding new model
 kwargs in a future release does not require updating the pipeline scripts.
 
+## Training
+
+The historical training-time decoder is kept separate from the release
+decoder so that checkpoint selection remains compatible with the reference
+artifact. To run the recorded TSP100 base-s1 configuration:
+
+```bash
+bash scripts/train_tsp100_base_s1.sh
+```
+
+Set `DEVICE`, `RESULTS_ROOT`, `TRAIN_DATA`, or `VAL_DATA` to override the
+launcher defaults. A timestamped output directory contains the resolved
+configuration, checkpoints, metrics, and decoded-tour artifacts. For a tiny
+two-run CPU determinism check, run:
+
+```bash
+bash scripts/smoke_train_determinism.sh
+```
+
 ### Reproducing paper Table 2 (LKH integration)
 
 Per-`n` LKH knobs used in the paper (mirrored from the internal sweep
@@ -156,13 +173,12 @@ Both write the same line format.
 
 ## Limitations
 
-- **No training code.** Only the forward pass, decoders, and the LKH bridge
-  are shipped.
 - **No baselines.** The paper compares against DIFUSCO, Fast-T2T, DIMES,
   UTSP, and NeuroLKH; each has its own license and install path and lives
   outside this repo.
-- **No pre-built datasets.** Generate your own with the scripts in
-  `data_gen/`; this avoids redistributing the Joshi et al. test files.
+- **Bundled datasets are limited to the supplied Concorde-format TSP
+  train/test files.** Other benchmark splits must be acquired or generated
+  separately.
 - **No bundled LKH / Concorde binaries.** Build them yourself per
   `docs/INSTALL.md`; the scripts take `--lkh_bin` and `--concorde_bin` as
   required arguments.
