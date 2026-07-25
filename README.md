@@ -103,6 +103,32 @@ read by `pipeline.run_lkh` / `pipeline.run_decode` via
 `inspect.signature(TSPEntropicOneTreeModel.__init__)`, so adding new model
 kwargs in a future release does not require updating the pipeline scripts.
 
+`checkpoints/c2tsp_tsp50_last/` additionally contains the requested TSP50
+artifact: its `model.pt` is copied from the source run's `model_last.pt`, with
+the matching `run_config.json`.
+
+### Choosing a root at evaluation
+
+The implicit 1-tree solver uses internal node 0 as its root.  Training already
+uses `--random_train_permute 1` by default, so each batch randomly assigns an
+original city to that internal root.  For a reproducible fixed choice at
+evaluation, both evaluators accept `--root K`, where `K` is a zero-based city
+index in the input dataset.  They relabel the instance before the model forward
+and restore outputs to original labels before decoding or passing candidates to
+LKH; the checkpoint itself is unchanged.
+
+To compare the TSP50 checkpoint at the nine alternative roots 1..9 with the
+same sampled decoder used by its source validation metric (pure decoding only;
+no LKH job):
+
+```bash
+bash scripts/eval_tsp50_root_sweep.sh
+```
+
+Set `ROOTS="0 1 2 3 4 5 6 7 8 9"` to include the root-0 baseline, or override
+`DEVICE`, `OUTPUT_DIR`, `DATASET`, and `RUN_DIR` as needed. The launcher uses
+the source run's `val_take=1000`; set `TAKE=0` to evaluate all 1,280 instances.
+
 ## Training
 
 The historical training-time decoder is kept separate from the release

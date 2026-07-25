@@ -50,6 +50,12 @@ import torch
 
 from tsp_onetree.data import ConcordeTSPDataset
 from tsp_onetree.model import TSPEntropicOneTreeModel
+from tsp_onetree.rooting import (
+    relabel_inputs_to_root_zero,
+    restore_lambda_nonroot,
+    restore_node_matrix,
+    validate_root,
+)
 from pipeline import lkh_integration as L
 
 
@@ -207,6 +213,7 @@ def _run_level(
     time_limit_s: float,
     seed: int,
     t_decode_s: float,
+    root: int,
 ) -> dict:
     par_path = work_dir / f"lkh_{level}.par"
     out_tour = work_dir / f"lkh_{level}.out"
@@ -225,11 +232,11 @@ def _run_level(
         assert mu_np is not None
         nbr_lists = _build_candidate_for_level(
             level, mu_np=mu_np, dist_np=dist_np, lambda_np=lambda_np,
-            cand_knn=cand_knn, cand_top_k=cand_top_k, root=0,
+            cand_knn=cand_knn, cand_top_k=cand_top_k, root=root,
         )
         nbr_mean, nbr_max = L.write_candidate_file_neurolkh_style(cand_path, nbr_lists)
         L.write_pi_file(pi_path, np.zeros(n - 1, dtype=np.float64),
-                        root=0, n=n, alpha=1.0)
+                        root=root, n=n, alpha=1.0)
 
     t_setup_s = time.perf_counter() - t_setup0
 
@@ -309,6 +316,7 @@ def _batch_network_forward(
     device: torch.device,
     batch_size: int,
     need_lambda: bool,
+    root: int,
 ) -> tuple[list[np.ndarray], list[np.ndarray] | None, float]:
     total_t = 0.0
     mus: list[np.ndarray] = []
@@ -317,17 +325,18 @@ def _batch_network_forward(
         end = min(start + batch_size, len(coords_list))
         coords_b = torch.stack(coords_list[start:end]).to(device)
         dist_b = torch.stack(dist_list[start:end]).to(device)
+        coords_model, dist_model, perm = relabel_inputs_to_root_zero(coords_b, dist_b, root)
         if device.type == "cuda":
             torch.cuda.synchronize()
         t0 = time.perf_counter()
         with torch.no_grad():
-            mu, _, _, aux = model(coords_b, dist_b, return_decode_aux=True)
+            mu, _, _, aux = model(coords_model, dist_model, return_decode_aux=True)
         if device.type == "cuda":
             torch.cuda.synchronize()
         total_t += time.perf_counter() - t0
-        mu_np = mu.cpu().numpy()
+        mu_np = restore_node_matrix(mu, perm).cpu().numpy()
         if lams is not None:
-            lam_np = aux["lambda_nr"].cpu().numpy()
+            lam_np = restore_lambda_nonroot(aux["lambda_nr"], perm, root).cpu().numpy()
         for i in range(end - start):
             mus.append(mu_np[i])
             if lams is not None:
@@ -393,6 +402,9 @@ def main() -> int:
                     help="K for Gumbel-Top-K. 0 -> auto by size: 8/16/32 for n=50/100/200.")
     ap.add_argument("--gumbel_scale", type=float, default=0.20)
     ap.add_argument("--decode_twoopt_passes", type=int, default=4)
+    ap.add_argument("--root", type=int, default=0,
+                    help="Zero-based original-city index used as the 1-tree root. "
+                         "The model is relabeled internally so its fixed root remains index 0.")
 
     ap.add_argument("--cand_knn", type=int, default=20)
     ap.add_argument("--cand_top_k", type=int, default=5)
@@ -428,6 +440,7 @@ def main() -> int:
     take = args.take if args.take > 0 else None
     ds = ConcordeTSPDataset(path=args.dataset, take=take, skip=args.skip)
     n = ds.num_cities
+    root = validate_root(args.root, n)
     max_trials = args.max_trials if args.max_trials > 0 else n
     print(f"[pipeline] n={n}, {len(ds)} instances, max_trials={max_trials}")
 
@@ -451,7 +464,7 @@ def main() -> int:
         dist_list = [ds.dist_matrices[i] for i in range(len(ds))]
         mus, lams, nn_total_time = _batch_network_forward(
             model, coords_list, dist_list, device,
-            batch_size=args.batch_size, need_lambda=need_lambda,
+            batch_size=args.batch_size, need_lambda=need_lambda, root=root,
         )
         per_inst_ms = 1000 * nn_total_time / max(len(ds), 1)
         print(f"[pipeline] network forward total: {nn_total_time:.2f}s  "
@@ -486,7 +499,7 @@ def main() -> int:
                     num_samples=num_samples,
                     gumbel_scale=args.gumbel_scale,
                     seed_base=args.seed,
-                    inst_idx=idx, root=0,
+                    inst_idx=idx, root=root,
                     twoopt_passes=args.decode_twoopt_passes,
                 )
 
@@ -506,6 +519,7 @@ def main() -> int:
                     max_trials=max_trials,
                     runs=args.runs, time_limit_s=args.time_limit_s, seed=args.seed,
                     t_decode_s=t_decode_s,
+                    root=root,
                 )
                 rec["idx"] = idx
                 rec["n"] = n
@@ -525,6 +539,7 @@ def main() -> int:
         "run_dir": str(Path(args.run_dir).resolve()),
         "lkh_bin": str(lkh_bin),
         "n": n,
+        "root": root,
         "num_instances": len(ds),
         "levels": levels,
         "num_samples": num_samples,

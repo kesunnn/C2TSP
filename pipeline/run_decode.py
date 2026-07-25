@@ -38,6 +38,7 @@ import torch
 from tsp_onetree.data import ConcordeTSPDataset
 from tsp_onetree.model import TSPEntropicOneTreeModel
 from tsp_onetree.decode import decode_gumbel, decode_tours_ablation
+from tsp_onetree.rooting import relabel_inputs_to_root_zero, restore_node_matrix, validate_root
 
 from pipeline.run_lkh import _load_model
 
@@ -109,6 +110,9 @@ def main() -> int:
                     help="Noise type for L4 sampled MAP-repair.")
     ap.add_argument("--l4_tau", type=float, default=0.20,
                     help="Temperature used by covariance-based L4 noise.")
+    ap.add_argument("--root", type=int, default=0,
+                    help="Zero-based original-city index used as the 1-tree root. "
+                         "The model is relabeled internally so its fixed root remains index 0.")
     ap.add_argument("--seed", type=int, default=12345)
     ap.add_argument("--device", type=str,
                     default="cuda:0" if torch.cuda.is_available() else "cpu")
@@ -134,6 +138,7 @@ def main() -> int:
     take = args.take if args.take > 0 else None
     ds = ConcordeTSPDataset(path=args.dataset, take=take, skip=args.skip)
     n = ds.num_cities
+    root = validate_root(args.root, n)
     B_total = len(ds)
     print(f"[decode] n={n}, {B_total} instances")
 
@@ -161,19 +166,23 @@ def main() -> int:
         end = min(start + args.batch_size, B_total)
         coords_b = torch.stack(coords_list[start:end]).to(device)
         dist_b = torch.stack(dist_list[start:end]).to(device)
+        coords_model, dist_model, perm = relabel_inputs_to_root_zero(coords_b, dist_b, root)
 
         if device.type == "cuda":
             torch.cuda.synchronize()
         t0 = time.perf_counter()
         with torch.no_grad():
-            mu, _, _, aux = model(coords_b, dist_b, return_decode_aux=True)
+            mu, _, _, aux = model(coords_model, dist_model, return_decode_aux=True)
         if device.type == "cuda":
             torch.cuda.synchronize()
         t_forward_total += time.perf_counter() - t0
 
-        C_mod = aux["C_mod"]
-        cand_mask = aux["cand_mask"]
+        mu = restore_node_matrix(mu, perm)
+        C_mod = restore_node_matrix(aux["C_mod"], perm)
+        cand_mask = restore_node_matrix(aux["cand_mask"], perm)
         pair_prob = aux.get("pair_prob")
+        if pair_prob is not None:
+            pair_prob = restore_node_matrix(pair_prob, perm)
 
         # One decode_tours_ablation call per requested twoopt budget. For levels
         # that don't depend on twoopt (L1/L3 raw), the first call suffices.
@@ -182,7 +191,7 @@ def main() -> int:
             t1 = time.perf_counter()
             out = decode_tours_ablation(
                 mu, C_mod, cand_mask, dist_b,
-                root=0,
+                root=root,
                 twoopt_passes=int(budget),
                 num_root_pairs=0,
                 num_gumbel_draws=int(args.num_gumbel_draws) if need_gumbel else 0,
@@ -211,7 +220,7 @@ def main() -> int:
                 t2 = time.perf_counter()
                 l4_out = decode_gumbel(
                     mu, C_mod, cand_mask, dist_b,
-                    root=0,
+                    root=root,
                     twoopt_passes=0,
                     num_draws=l4_draws,
                     gumbel_scale=float(args.gumbel_scale),
@@ -232,6 +241,7 @@ def main() -> int:
         "dataset": str(Path(args.dataset).resolve()),
         "run_dir": str(Path(args.run_dir).resolve()),
         "n": n,
+        "root": root,
         "num_instances": B_total,
         "levels": levels,
         "num_gumbel_draws": int(args.num_gumbel_draws),
