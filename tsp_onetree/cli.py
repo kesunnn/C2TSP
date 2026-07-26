@@ -91,6 +91,8 @@ def get_args():
                    help="If 1, detach the round-1 refinement state before the second round so round 2 acts as a cleaner residual correction.")
     p.add_argument("--disable_stage2_gnn_forward", type=int, default=1,
                    help="If 1, skip the second GNN forward and use only the stage-1 edge cost plus stage-2 certificate tilt for the final stage-2 solve/loss.")
+    p.add_argument("--skip_stage1_hk", type=int, default=0,
+                   help="If 1, bypass the stage-1 HK equilibrium solve and use direct zero-dual rooted 1-tree marginals. Stage 2 remains unchanged.")
     p.add_argument("--num_refine_rounds", type=int, default=2, choices=[1, 2],
                    help="Number of refinement rounds for the shared-weight model. Use 1 to run the refactored code as a strict one-round baseline.")
     p.add_argument("--single_round_use_stage2_loss", type=int, default=0,

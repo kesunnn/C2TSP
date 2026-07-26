@@ -437,6 +437,7 @@ def train(args):
         f"| final_frac={args.inner_final_frac:.2f} | cov_shrink={args.cov_shrink:g} | lm={args.lm_damping:g} "
         f"| detach_refine={int(bool(args.detach_refine_state))} "
         f"| st2_gnn={0 if bool(args.disable_stage2_gnn_forward) else 1} "
+        f"| skip_st1_hk={int(bool(args.skip_stage1_hk))} "
         f"| grad_ckpt={int(bool(args.gradient_checkpoint))} | edge_hidden_mult={int(args.edge_hidden_mult)} "
         f"| decode M={args.decode_gumbel_M} sig={args.decode_gumbel_scale:g} noise={args.decode_noise_type} "
         f"lam_eval={args.decode_lam_iters if args.decode_lam_iters > 0 else args.lam_iters}"
@@ -516,6 +517,7 @@ def train(args):
         lm_damping=args.lm_damping,
         detach_refine_state=args.detach_refine_state,
         disable_stage2_gnn_forward=args.disable_stage2_gnn_forward,
+        skip_stage1_hk=args.skip_stage1_hk,
         gradient_checkpoint=bool(args.gradient_checkpoint),
     ).to(device)
 

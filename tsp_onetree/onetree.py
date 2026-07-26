@@ -382,6 +382,41 @@ def expected_degree_residual_from_z(
     return G, info
 
 
+def zero_dual_rooted_onetree(
+    C_theta: torch.Tensor,
+    tau: float,
+    root: int = 0,
+    jitter: float = 1e-6,
+    out_dtype: torch.dtype | None = None,
+) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """Evaluate rooted 1-tree marginals at the zero non-root dual.
+
+    This is the direct, differentiable stage-1 ablation path.  It deliberately
+    does *not* run the Held--Karp equilibrium solver.  The residual follows the
+    same gauge-projected convention as :func:`expected_degree_residual_from_z`.
+    """
+    B, n, _ = C_theta.shape
+    if out_dtype is None:
+        out_dtype = C_theta.dtype
+    lambda_nr = torch.zeros(B, n - 1, device=C_theta.device, dtype=C_theta.dtype)
+    mu, info = rooted_onetree_distribution(
+        C_theta,
+        lambda_nr,
+        tau=tau,
+        root=root,
+        jitter=jitter,
+        out_dtype=out_dtype,
+    )
+    Q = mean_zero_basis(n - 1, device=C_theta.device, dtype=out_dtype)
+    F_nr = info["degree_nr"] - 2.0
+    G = F_nr @ Q
+    info["lambda_nr"] = lambda_nr.to(out_dtype)
+    info["F_nr"] = F_nr
+    info["G"] = G
+    info["residual"] = G.norm(dim=-1)
+    return mu, info
+
+
 def build_inner_tau_path(
     target_tau: float,
     inner_homotopy: bool = True,

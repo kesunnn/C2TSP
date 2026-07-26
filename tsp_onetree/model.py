@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from .encoder import NeighborhoodEdgePriorEncoder, project_edge_residual_candidate_weighted
 from .graph import build_candidate_mask
 from .implicit_layer import rooted_onetree_implicit_layer
-from .onetree import split_lam_iters_across_stages
+from .onetree import split_lam_iters_across_stages, zero_dual_rooted_onetree
 
 class TSPEntropicOneTreeModel(nn.Module):
     """Two-round shared-weight residual refinement model over the rooted 1-tree family.
@@ -50,6 +50,7 @@ class TSPEntropicOneTreeModel(nn.Module):
         lm_damping: float = 0.05,
         detach_refine_state: int = 1,
         disable_stage2_gnn_forward: int = 0,
+        skip_stage1_hk: int = 0,
         round2_use_struct_gate: int = 1,
         round2_gate_detach_features: int = 0,
         round2_gate_hidden_dim: int = 64,
@@ -150,6 +151,9 @@ class TSPEntropicOneTreeModel(nn.Module):
         self.refine_state_scale = 2.0
         self.detach_refine_state = bool(detach_refine_state)
         self.disable_stage2_gnn_forward = bool(disable_stage2_gnn_forward)
+        # Default-off ablation: stage 1 uses direct zero-dual marginals rather
+        # than the HK equilibrium solve. Stage 2 continues to use HK normally.
+        self.skip_stage1_hk = bool(skip_stage1_hk)
         self.round2_use_struct_gate = bool(round2_use_struct_gate)
         self.round2_gate_detach_features = bool(round2_gate_detach_features)
         gate_hidden = max(16, int(round2_gate_hidden_dim))
@@ -738,7 +742,19 @@ class TSPEntropicOneTreeModel(nn.Module):
             C_theta_base = C_theta_base * full_f
 
             stage2_coupled_info = None
-            if round_idx > 0 and self.sharpen_beta > 0 and round_records:
+            if round_idx == 0 and self.skip_stage1_hk:
+                C_theta = C_theta_base
+                mu, zero_dual_info = zero_dual_rooted_onetree(
+                    C_theta,
+                    self.tau,
+                    root=self.root,
+                    out_dtype=dist_matrix.dtype,
+                )
+                lambda_nr = zero_dual_info["lambda_nr"]
+                degree = zero_dual_info["degree"]
+                entropy = zero_dual_info["entropy"]
+                residual = zero_dual_info["residual"]
+            elif round_idx > 0 and self.sharpen_beta > 0 and round_records:
                 if self.stage2_steps > 1:
                     C_theta = C_theta_base
                     mu_ref = round_records[-1]["mu"]
