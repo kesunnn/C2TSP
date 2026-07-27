@@ -7,6 +7,8 @@ are unchanged; only the solver's node labels are changed.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 
 
@@ -77,3 +79,79 @@ def restore_lambda_nonroot(
     nonroot = torch.arange(n, device=lambda_nr.device)
     nonroot = nonroot[nonroot != root]
     return full.index_select(1, nonroot)
+
+
+@torch.no_grad()
+def ensemble_root_outputs(
+    model: torch.nn.Module,
+    coords: torch.Tensor,
+    dist: torch.Tensor,
+    roots: Sequence[int],
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    """Average root-specific marginal and decoder-score outputs in original order.
+
+    ``model`` always uses internal node zero as its rooted 1-tree node. This
+    helper relabels every requested original-city root to that position, restores
+    both outputs to the original labels, and averages them. The returned
+    ``c_mod_mean`` is a decoder score ensemble; it is not associated with one
+    common Held--Karp dual vector.
+    """
+    if coords.ndim != 3 or dist.ndim != 3:
+        raise ValueError("coords and dist must be batched tensors")
+    n = int(coords.shape[1])
+    if dist.shape[1:] != (n, n):
+        raise ValueError("dist shape must be (B, n, n) for coords shape (B, n, d)")
+
+    root_list = [validate_root(root, n) for root in roots]
+    if not root_list:
+        raise ValueError("roots must contain at least one root index")
+    if len(set(root_list)) != len(root_list):
+        raise ValueError("roots must not contain duplicate root indices")
+    root_list.sort()
+
+    mu_sum = None
+    c_mod_sum = None
+    mu_sq_sum = None
+    c_mod_sq_sum = None
+    for root in root_list:
+        coords_model, dist_model, perm = relabel_inputs_to_root_zero(coords, dist, root)
+        mu, _, _, aux = model(coords_model, dist_model, return_decode_aux=True)
+        if "C_mod" not in aux:
+            raise KeyError("model decode auxiliary output is missing C_mod")
+        mu_restored = restore_node_matrix(mu, perm)
+        c_mod_restored = restore_node_matrix(aux["C_mod"], perm)
+        if mu_restored.shape != dist.shape or c_mod_restored.shape != dist.shape:
+            raise ValueError("model outputs must have shape (B, n, n)")
+
+        if mu_sum is None:
+            mu_sum = mu_restored.clone()
+            c_mod_sum = c_mod_restored.clone()
+            mu_sq_sum = mu_restored.square()
+            c_mod_sq_sum = c_mod_restored.square()
+        else:
+            mu_sum = mu_sum + mu_restored
+            c_mod_sum = c_mod_sum + c_mod_restored
+            mu_sq_sum = mu_sq_sum + mu_restored.square()
+            c_mod_sq_sum = c_mod_sq_sum + c_mod_restored.square()
+
+    assert mu_sum is not None
+    assert c_mod_sum is not None
+    assert mu_sq_sum is not None
+    assert c_mod_sq_sum is not None
+    root_count = float(len(root_list))
+    mu_mean = mu_sum / root_count
+    c_mod_mean = c_mod_sum / root_count
+    mu_std = (mu_sq_sum / root_count - mu_mean.square()).clamp_min(0.0).sqrt()
+    c_mod_std = (c_mod_sq_sum / root_count - c_mod_mean.square()).clamp_min(0.0).sqrt()
+    degree_mismatch = (mu_mean.sum(dim=-1) - 2.0).abs()
+
+    diagnostics = {
+        "mu_root_std_mean": mu_std.mean(),
+        "c_mod_root_std_mean": c_mod_std.mean(),
+        "mu_symmetry_max": (mu_mean - mu_mean.transpose(-2, -1)).abs().amax(),
+        "mu_diagonal_abs_max": torch.diagonal(mu_mean, dim1=-2, dim2=-1).abs().amax(),
+        "degree_mismatch_mean": degree_mismatch.mean(),
+        "degree_mismatch_max": degree_mismatch.amax(),
+        "c_mod_symmetry_max": (c_mod_mean - c_mod_mean.transpose(-2, -1)).abs().amax(),
+    }
+    return mu_mean, c_mod_mean, diagnostics

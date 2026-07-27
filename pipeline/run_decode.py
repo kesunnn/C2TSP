@@ -38,7 +38,13 @@ import torch
 from tsp_onetree.data import ConcordeTSPDataset
 from tsp_onetree.model import TSPEntropicOneTreeModel
 from tsp_onetree.decode import decode_gumbel, decode_tours_ablation
-from tsp_onetree.rooting import relabel_inputs_to_root_zero, restore_node_matrix, validate_root
+from tsp_onetree.graph import build_candidate_mask
+from tsp_onetree.rooting import (
+    ensemble_root_outputs,
+    relabel_inputs_to_root_zero,
+    restore_node_matrix,
+    validate_root,
+)
 
 from pipeline.run_lkh import _load_model
 
@@ -113,6 +119,10 @@ def main() -> int:
     ap.add_argument("--root", type=int, default=0,
                     help="Zero-based original-city index used as the 1-tree root. "
                          "The model is relabeled internally so its fixed root remains index 0.")
+    ap.add_argument("--root_ensemble_size", type=int, default=0,
+                    help="0 preserves fixed-root inference. K>0 averages restored mu and "
+                         "C_mod from model roots 0,...,K-1 before every decode; --root then "
+                         "selects the decoder anchor root.")
     ap.add_argument("--seed", type=int, default=12345)
     ap.add_argument("--device", type=str,
                     default="cuda:0" if torch.cuda.is_available() else "cpu")
@@ -139,6 +149,12 @@ def main() -> int:
     ds = ConcordeTSPDataset(path=args.dataset, take=take, skip=args.skip)
     n = ds.num_cities
     root = validate_root(args.root, n)
+    root_ensemble_size = int(args.root_ensemble_size)
+    if not 0 <= root_ensemble_size <= n:
+        ap.error(
+            f"--root_ensemble_size must be in [0, {n}], got {root_ensemble_size}"
+        )
+    model_roots = list(range(root_ensemble_size)) if root_ensemble_size > 0 else [root]
     B_total = len(ds)
     print(f"[decode] n={n}, {B_total} instances")
 
@@ -162,27 +178,53 @@ def main() -> int:
     cost_by_level: dict[str, np.ndarray] = {l: np.full(B_total, np.nan) for l in levels}
     t_decode_total = 0.0
     t_forward_total = 0.0
+    ensemble_diagnostic_sums: dict[str, float] = {}
+    ensemble_diagnostic_max: dict[str, float] = {}
     for start in range(0, B_total, args.batch_size):
         end = min(start + args.batch_size, B_total)
         coords_b = torch.stack(coords_list[start:end]).to(device)
         dist_b = torch.stack(dist_list[start:end]).to(device)
-        coords_model, dist_model, perm = relabel_inputs_to_root_zero(coords_b, dist_b, root)
-
         if device.type == "cuda":
             torch.cuda.synchronize()
         t0 = time.perf_counter()
         with torch.no_grad():
-            mu, _, _, aux = model(coords_model, dist_model, return_decode_aux=True)
+            if root_ensemble_size == 0:
+                # Preserve the established fixed-root release-decoder path.
+                coords_model, dist_model, perm = relabel_inputs_to_root_zero(coords_b, dist_b, root)
+                mu, _, _, aux = model(coords_model, dist_model, return_decode_aux=True)
+            else:
+                mu, C_mod, diagnostics = ensemble_root_outputs(
+                    model, coords_b, dist_b, model_roots
+                )
         if device.type == "cuda":
             torch.cuda.synchronize()
         t_forward_total += time.perf_counter() - t0
 
-        mu = restore_node_matrix(mu, perm)
-        C_mod = restore_node_matrix(aux["C_mod"], perm)
-        cand_mask = restore_node_matrix(aux["cand_mask"], perm)
-        pair_prob = aux.get("pair_prob")
-        if pair_prob is not None:
-            pair_prob = restore_node_matrix(pair_prob, perm)
+        if root_ensemble_size == 0:
+            mu = restore_node_matrix(mu, perm)
+            C_mod = restore_node_matrix(aux["C_mod"], perm)
+            cand_mask = restore_node_matrix(aux["cand_mask"], perm)
+            pair_prob = aux.get("pair_prob")
+            if pair_prob is not None:
+                pair_prob = restore_node_matrix(pair_prob, perm)
+        else:
+            # Do not borrow root-dependent candidate or root-pair auxiliaries
+            # from one forward.  This release evaluator has num_root_pairs=0,
+            # so pair_prob is unused by every L1--L4 level.
+            cand_mask = build_candidate_mask(dist_b, int(model.candidate_k))
+            C_mod = C_mod * (~torch.eye(n, device=device, dtype=torch.bool)).unsqueeze(0)
+            pair_prob = None
+            batch_n = end - start
+            for name, value in diagnostics.items():
+                value_float = float(value.detach().item())
+                if name.endswith("_max"):
+                    ensemble_diagnostic_max[name] = max(
+                        ensemble_diagnostic_max.get(name, float("-inf")), value_float
+                    )
+                else:
+                    ensemble_diagnostic_sums[name] = (
+                        ensemble_diagnostic_sums.get(name, 0.0) + value_float * batch_n
+                    )
 
         # One decode_tours_ablation call per requested twoopt budget. For levels
         # that don't depend on twoopt (L1/L3 raw), the first call suffices.
@@ -260,6 +302,22 @@ def main() -> int:
                 "opt_cost": opt_costs.tolist()} for l in levels
         },
     }
+    if root_ensemble_size > 0:
+        output["root_ensemble"] = {
+            "size": root_ensemble_size,
+            "model_roots": model_roots,
+            "decoder_anchor_root": root,
+            "c_mod_policy": "mean_restored_c_mod",
+            "candidate_mask_policy": "canonical_metric_knn",
+            "pair_prob_policy": "unused_num_root_pairs_zero",
+            "diagnostics": {
+                **{
+                    name: value / max(B_total, 1)
+                    for name, value in ensemble_diagnostic_sums.items()
+                },
+                **ensemble_diagnostic_max,
+            },
+        }
     out_path = Path(args.output_json)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(output, indent=2))

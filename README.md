@@ -129,6 +129,12 @@ Set `ROOTS="0 1 2 3 4 5 6 7 8 9"` to include the root-0 baseline, or override
 `DEVICE`, `OUTPUT_DIR`, `DATASET`, and `RUN_DIR` as needed. The launcher uses
 the source run's `val_take=1000`; set `TAKE=0` to evaluate all 1,280 instances.
 
+For inference-time root ensembling in `pipeline.run_decode_repro`, add
+`--root_ensemble_size K`. For `K>0`, the evaluator averages restored `mu` and
+`C_mod` outputs from model roots `0,...,K-1` before decoding. `K=0` (default)
+preserves the fixed-root path. While ensembling, `--root` selects the decoder
+anchor root rather than the model-forward root.
+
 ## Training
 
 The historical training-time decoder is kept separate from the release
