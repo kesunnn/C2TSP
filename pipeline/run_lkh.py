@@ -48,7 +48,7 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 import numpy as np
 import torch
 
-from tsp_onetree.data import ConcordeTSPDataset
+from tsp_onetree.data import ConcordeTSPDataset, MetricTSPDataset
 from tsp_onetree.model import TSPEntropicOneTreeModel
 from tsp_onetree.rooting import (
     relabel_inputs_to_root_zero,
@@ -126,6 +126,13 @@ def _parse_trial_trace(stdout: str, opt_cost_int: int) -> dict:
     }
 
 
+def _tour_cost_matrix_int(cost_int: np.ndarray, tour: np.ndarray) -> int:
+    order = np.asarray(tour, dtype=np.int64)
+    if order.ndim != 1 or order.size != cost_int.shape[0]:
+        raise ValueError("tour must be a permutation with one entry per cost-matrix node")
+    return int(cost_int[order, np.roll(order, -1)].sum(dtype=np.int64))
+
+
 def _gumbel_topk_for_size(n: int, default_per_size: dict[int, int]) -> int:
     return int(default_per_size.get(int(n), max(8, min(32, int(round(n / 8))))))
 
@@ -194,13 +201,16 @@ def _run_level(
     level: str,
     *,
     inst_idx: int,
-    coords_np: np.ndarray,
-    int_coords: np.ndarray,
+    coords_np: np.ndarray | None,
+    int_coords: np.ndarray | None,
     dist_np: np.ndarray,
+    cost_int_matrix: np.ndarray | None,
     mu_np: np.ndarray | None,
     lambda_np: np.ndarray | None,
     sampled_tours: list[list[int]] | None,
     opt_tour: np.ndarray,
+    reference_cost_int: int | None,
+    reference_status: str | None,
     tsp_path: Path,
     work_dir: Path,
     lkh_bin: Path,
@@ -267,14 +277,30 @@ def _run_level(
     result = L.run_lkh(lkh_bin, par_path, dimension=n, output_tour_path=out_tour)
     t_subprocess_s = time.perf_counter() - t_sub0
 
-    opt_cost_norm = L.tour_cost_norm(coords_np, opt_tour)
-    opt_cost_int = L.tour_cost_euc2d_int(int_coords, opt_tour)
-    if result.tour is not None:
-        lkh_cost_norm = L.tour_cost_norm(coords_np, result.tour)
-        lkh_cost_int = L.tour_cost_euc2d_int(int_coords, result.tour)
+    if cost_int_matrix is None:
+        assert coords_np is not None and int_coords is not None
+        opt_cost_norm = L.tour_cost_norm(coords_np, opt_tour)
+        opt_cost_int = L.tour_cost_euc2d_int(int_coords, opt_tour)
+        if result.tour is not None:
+            lkh_cost_norm = L.tour_cost_norm(coords_np, result.tour)
+            lkh_cost_int = L.tour_cost_euc2d_int(int_coords, result.tour)
+        else:
+            lkh_cost_norm = float("nan")
+            lkh_cost_int = None
     else:
-        lkh_cost_norm = float("nan")
-        lkh_cost_int = None
+        opt_cost_int = (
+            int(reference_cost_int)
+            if reference_cost_int is not None
+            else _tour_cost_matrix_int(cost_int_matrix, opt_tour)
+        )
+        cost_scale = float(max(int(cost_int_matrix.max()), 1))
+        opt_cost_norm = float(opt_cost_int) / cost_scale
+        if result.tour is not None:
+            lkh_cost_int = _tour_cost_matrix_int(cost_int_matrix, result.tour)
+            lkh_cost_norm = float(lkh_cost_int) / cost_scale
+        else:
+            lkh_cost_norm = float("nan")
+            lkh_cost_int = None
     gap_pct = (
         100.0 * (lkh_cost_norm - opt_cost_norm) / opt_cost_norm
         if opt_cost_norm > 0 and np.isfinite(lkh_cost_norm) else float("nan")
@@ -300,6 +326,7 @@ def _run_level(
         "lkh_cost_norm": float(lkh_cost_norm) if np.isfinite(lkh_cost_norm) else None,
         "opt_cost_int": int(opt_cost_int),
         "opt_cost_norm": float(opt_cost_norm),
+        "reference_status": reference_status,
         "gap_pct": float(gap_pct) if np.isfinite(gap_pct) else None,
         "reached_opt": bool(lkh_cost_int is not None and lkh_cost_int <= opt_cost_int),
         "cand_nbr_mean": nbr_mean,
@@ -387,7 +414,9 @@ def main() -> int:
     ap.add_argument("--run_dir", type=str, default=str(default_run_dir),
                     help="Directory containing model.pt and run_config.json.")
     ap.add_argument("--dataset", type=str, required=True,
-                    help="Path to a Concorde-format .txt instance file.")
+                    help="Concorde-format .txt file or metric manifest.jsonl / directory.")
+    ap.add_argument("--dataset_format", choices=("auto", "concorde", "metric"), default="auto",
+                    help="Input format. auto detects a metric manifest or directory.")
     ap.add_argument("--lkh_bin", type=str, required=True,
                     help="Path to the LKH-3 executable (build it from "
                          "http://akira.ruc.dk/~keld/research/LKH-3/).")
@@ -438,14 +467,24 @@ def main() -> int:
 
     print(f"[pipeline] loading dataset: {args.dataset}")
     take = args.take if args.take > 0 else None
-    ds = ConcordeTSPDataset(path=args.dataset, take=take, skip=args.skip)
+    dataset_path = Path(args.dataset).expanduser()
+    is_metric = args.dataset_format == "metric" or (
+        args.dataset_format == "auto"
+        and (dataset_path.is_dir() or dataset_path.name == "manifest.jsonl")
+    )
+    if is_metric:
+        ds = MetricTSPDataset(path=dataset_path, take=take, skip=args.skip)
+    else:
+        ds = ConcordeTSPDataset(path=args.dataset, take=take, skip=args.skip)
     n = ds.num_cities
-    root = validate_root(args.root, n)
-    max_trials = args.max_trials if args.max_trials > 0 else n
-    print(f"[pipeline] n={n}, {len(ds)} instances, max_trials={max_trials}")
+    min_n = n if n is not None else min(ds.sizes)
+    root = validate_root(args.root, min_n)
+    max_trials = args.max_trials if args.max_trials > 0 else min_n
+    size_desc = str(n) if n is not None else f"mixed sizes={list(ds.sizes)}"
+    print(f"[pipeline] n={size_desc}, {len(ds)} instances, max_trials={max_trials}")
 
     auto_K_by_size = {50: 8, 100: 16, 200: 32}
-    num_samples = int(args.num_samples) if args.num_samples > 0 else _gumbel_topk_for_size(n, auto_K_by_size)
+    num_samples = int(args.num_samples) if args.num_samples > 0 else _gumbel_topk_for_size(min_n, auto_K_by_size)
 
     print(f"[pipeline] num_samples={num_samples}, gumbel_scale={args.gumbel_scale}")
     print(f"[pipeline] candidate: knn={args.cand_knn}, top_k={args.cand_top_k}, "
@@ -457,7 +496,7 @@ def main() -> int:
     mus: list[np.ndarray] = []
     lams: list[np.ndarray] | None = None
     nn_total_time = 0.0
-    if need_nn:
+    if need_nn and not is_metric:
         print(f"[pipeline] running network forward on {len(ds)} instances "
               f"(batch={args.batch_size}, need_lambda={need_lambda})...")
         coords_list = [ds.coords[i] for i in range(len(ds))]
@@ -469,6 +508,8 @@ def main() -> int:
         per_inst_ms = 1000 * nn_total_time / max(len(ds), 1)
         print(f"[pipeline] network forward total: {nn_total_time:.2f}s  "
               f"amortized per instance: {per_inst_ms:.2f}ms")
+    elif need_nn:
+        print("[pipeline] metric dataset: forwarding lazily per instance to avoid retaining dense matrices.")
 
     lkh_bin = Path(args.lkh_bin).resolve()
     if not lkh_bin.exists():
@@ -482,49 +523,89 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="lkh_pipe_") as td_shared:
         td_shared = Path(td_shared)
         for idx in range(len(ds)):
-            coords = ds.coords[idx].numpy()
-            dist_np = ds.dist_matrices[idx].numpy()
-            opt_tour = ds.opt_tours[idx].numpy()
+            cost_int_matrix: np.ndarray | None = None
+            reference_cost_int: int | None = None
+            reference_status: str | None = None
+            model_time_for_instance = nn_per_inst_s
+            if is_metric:
+                coords_t, d_model_t, opt_tour_t, cost_int_t, metadata = ds[idx]
+                n_instance = int(metadata["n"])
+                root_instance = validate_root(args.root, n_instance)
+                max_trials_instance = args.max_trials if args.max_trials > 0 else n_instance
+                num_samples_instance = (
+                    int(args.num_samples) if args.num_samples > 0
+                    else _gumbel_topk_for_size(n_instance, auto_K_by_size)
+                )
+                coords = coords_t.numpy()
+                dist_np = d_model_t.numpy()
+                opt_tour = opt_tour_t.numpy()
+                cost_int_matrix = cost_int_t.numpy()
+                reference_cost_int = int(metadata["reference_cost_int"])
+                reference_status = str(metadata.get("label_status", "")) or None
+                if need_nn:
+                    mus_one, lams_one, model_time_for_instance = _batch_network_forward(
+                        model, [coords_t], [d_model_t], device,
+                        batch_size=1, need_lambda=need_lambda, root=root_instance,
+                    )
+                    mu_np = mus_one[0]
+                    lam_np = lams_one[0] if lams_one is not None else None
+                    nn_total_time += model_time_for_instance
+                else:
+                    mu_np = None
+                    lam_np = None
+            else:
+                n_instance = n
+                root_instance = root
+                max_trials_instance = max_trials
+                num_samples_instance = num_samples
+                coords = ds.coords[idx].numpy()
+                dist_np = ds.dist_matrices[idx].numpy()
+                opt_tour = ds.opt_tours[idx].numpy()
+                mu_np = mus[idx] if mus else None
+                lam_np = lams[idx] if lams is not None else None
             tsp_path = td_shared / f"inst_{idx:05d}.tsp"
-            int_coords = L.write_tsplib(tsp_path, coords, name=f"inst_{idx}",
-                                        coord_scale=args.coord_scale)
-            mu_np = mus[idx] if mus else None
-            lam_np = lams[idx] if lams is not None else None
+            if cost_int_matrix is None:
+                int_coords = L.write_tsplib(tsp_path, coords, name=f"inst_{idx}",
+                                            coord_scale=args.coord_scale)
+            else:
+                int_coords = None
+                L.write_explicit_tsplib(tsp_path, cost_int_matrix, name=f"inst_{idx}")
 
             sampled_tours: list[list[int]] | None = None
             t_decode_s = 0.0
             if need_decode and mu_np is not None:
                 sampled_tours, _, t_decode_s = _decode_for_instance(
                     mu_np, dist_np,
-                    num_samples=num_samples,
+                    num_samples=num_samples_instance,
                     gumbel_scale=args.gumbel_scale,
                     seed_base=args.seed,
-                    inst_idx=idx, root=root,
+                    inst_idx=idx, root=root_instance,
                     twoopt_passes=args.decode_twoopt_passes,
                 )
 
             for level in levels:
                 rec = _run_level(
                     level,
-                    inst_idx=idx,
-                    coords_np=coords, int_coords=int_coords, dist_np=dist_np,
+                    inst_idx=idx, coords_np=coords, int_coords=int_coords,
+                    dist_np=dist_np, cost_int_matrix=cost_int_matrix,
                     mu_np=mu_np, lambda_np=lam_np,
                     sampled_tours=sampled_tours,
-                    opt_tour=opt_tour,
+                    opt_tour=opt_tour, reference_cost_int=reference_cost_int,
+                    reference_status=reference_status,
                     tsp_path=tsp_path, work_dir=td_shared, lkh_bin=lkh_bin,
-                    n=n,
+                    n=n_instance,
                     cand_knn=args.cand_knn,
                     cand_top_k=args.cand_top_k,
                     cand_max_candidates=args.cand_max_candidates,
-                    max_trials=max_trials,
+                    max_trials=max_trials_instance,
                     runs=args.runs, time_limit_s=args.time_limit_s, seed=args.seed,
                     t_decode_s=t_decode_s,
-                    root=root,
+                    root=root_instance,
                 )
                 rec["idx"] = idx
-                rec["n"] = n
+                rec["n"] = n_instance
                 rec["t_model_amortized_s"] = (
-                    float(nn_per_inst_s) if level != "H0" else 0.0
+                    float(model_time_for_instance) if level != "H0" else 0.0
                 )
                 records.append(rec)
 
@@ -536,9 +617,11 @@ def main() -> int:
     summary = _summarize(records, levels)
     output = {
         "dataset": str(Path(args.dataset).resolve()),
+        "dataset_format": "metric" if is_metric else "concorde",
         "run_dir": str(Path(args.run_dir).resolve()),
         "lkh_bin": str(lkh_bin),
         "n": n,
+        "sizes": list(ds.sizes) if is_metric else [n],
         "root": root,
         "num_instances": len(ds),
         "levels": levels,

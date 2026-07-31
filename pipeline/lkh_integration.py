@@ -89,6 +89,36 @@ def write_tsplib(
     return int_coords
 
 
+def write_explicit_tsplib(
+    path: Path,
+    cost_int: np.ndarray,
+    name: str,
+) -> None:
+    """Write a symmetric integer metric as TSPLIB ``EXPLICIT/FULL_MATRIX``.
+
+    This is the counterpart to :func:`write_tsplib` for graph-induced and
+    other non-Euclidean metrics.  It deliberately does not derive costs from
+    coordinates.
+    """
+    costs = np.asarray(cost_int)
+    if costs.ndim != 2 or costs.shape[0] != costs.shape[1]:
+        raise ValueError(f"cost_int must be square, got {costs.shape}")
+    if not np.array_equal(costs, costs.T):
+        raise ValueError("cost_int must be symmetric for symmetric TSP/LKH")
+    n = costs.shape[0]
+    with path.open("w", encoding="utf-8") as f:
+        f.write(f"NAME: {name}\n")
+        f.write("TYPE: TSP\n")
+        f.write(f"DIMENSION: {n}\n")
+        f.write("EDGE_WEIGHT_TYPE: EXPLICIT\n")
+        f.write("EDGE_WEIGHT_FORMAT: FULL_MATRIX\n")
+        f.write("EDGE_WEIGHT_SECTION\n")
+        for row in costs:
+            f.write(" ".join(str(int(value)) for value in row))
+            f.write("\n")
+        f.write("EOF\n")
+
+
 def write_initial_tour_file(path: Path, tour_0idx: Iterable[int], n: int, name: str) -> None:
     """Write a TSPLIB .tour file. `tour_0idx` is a permutation of 0..n-1."""
     tour = list(tour_0idx)

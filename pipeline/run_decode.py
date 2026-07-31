@@ -35,7 +35,7 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 import numpy as np
 import torch
 
-from tsp_onetree.data import ConcordeTSPDataset
+from tsp_onetree.data import ConcordeTSPDataset, MetricTSPDataset
 from tsp_onetree.model import TSPEntropicOneTreeModel
 from tsp_onetree.decode import decode_gumbel, decode_tours_ablation
 from tsp_onetree.graph import build_candidate_mask
@@ -100,7 +100,9 @@ def main() -> int:
     default_run_dir = Path(__file__).resolve().parent.parent / "checkpoints" / "c2tsp_tsp100"
     ap.add_argument("--run_dir", type=str, default=str(default_run_dir))
     ap.add_argument("--dataset", type=str, required=True,
-                    help="Concorde-format .txt instance file.")
+                    help="Concorde-format .txt file or metric manifest.jsonl / directory.")
+    ap.add_argument("--dataset_format", choices=("auto", "concorde", "metric"), default="auto",
+                    help="Input format. auto detects a metric manifest or directory.")
     ap.add_argument("--levels", type=str, default="L1,L2x1,L2x10,L2x100,L3,L4",
                     help=f"Comma-list from {DECODE_LEVELS}")
     ap.add_argument("--take", type=int, default=0)
@@ -146,25 +148,40 @@ def main() -> int:
 
     print(f"[decode] loading dataset: {args.dataset}")
     take = args.take if args.take > 0 else None
-    ds = ConcordeTSPDataset(path=args.dataset, take=take, skip=args.skip)
-    n = ds.num_cities
-    root = validate_root(args.root, n)
-    root_ensemble_size = int(args.root_ensemble_size)
-    if not 0 <= root_ensemble_size <= n:
-        ap.error(
-            f"--root_ensemble_size must be in [0, {n}], got {root_ensemble_size}"
-        )
-    model_roots = list(range(root_ensemble_size)) if root_ensemble_size > 0 else [root]
-    B_total = len(ds)
-    print(f"[decode] n={n}, {B_total} instances")
-
-    coords_list = [ds.coords[i] for i in range(B_total)]
-    dist_list = [ds.dist_matrices[i] for i in range(B_total)]
-    opt_costs = np.array(
-        [_reference_tour_cost(ds.opt_tours[i].numpy(), ds.dist_matrices[i].numpy())
-         for i in range(B_total)],
-        dtype=np.float64,
+    dataset_path = Path(args.dataset).expanduser()
+    is_metric = args.dataset_format == "metric" or (
+        args.dataset_format == "auto"
+        and (dataset_path.is_dir() or dataset_path.name == "manifest.jsonl")
     )
+    if is_metric:
+        ds = MetricTSPDataset(path=dataset_path, take=take, skip=args.skip)
+    else:
+        ds = ConcordeTSPDataset(path=args.dataset, take=take, skip=args.skip)
+    n = ds.num_cities
+    min_n = n if n is not None else min(ds.sizes)
+    root = validate_root(args.root, min_n)
+    root_ensemble_size = int(args.root_ensemble_size)
+    if not 0 <= root_ensemble_size <= min_n:
+        ap.error(
+            f"--root_ensemble_size must be in [0, {min_n}], got {root_ensemble_size}"
+        )
+    B_total = len(ds)
+    size_desc = str(n) if n is not None else f"mixed sizes={list(ds.sizes)}"
+    print(f"[decode] n={size_desc}, {B_total} instances")
+
+    if is_metric:
+        opt_costs = np.array(
+            [float(ds.metadata(i)["reference_cost_int"]) for i in range(B_total)],
+            dtype=np.float64,
+        )
+    else:
+        coords_list = [ds.coords[i] for i in range(B_total)]
+        dist_list = [ds.dist_matrices[i] for i in range(B_total)]
+        opt_costs = np.array(
+            [_reference_tour_cost(ds.opt_tours[i].numpy(), ds.dist_matrices[i].numpy())
+             for i in range(B_total)],
+            dtype=np.float64,
+        )
 
     # 2-opt budgets we actually need: union of {0} and any L2xK.
     needed_2opt = sorted({_twoopt_passes_for(l) for l in levels})
@@ -180,17 +197,46 @@ def main() -> int:
     t_forward_total = 0.0
     ensemble_diagnostic_sums: dict[str, float] = {}
     ensemble_diagnostic_max: dict[str, float] = {}
-    for start in range(0, B_total, args.batch_size):
-        end = min(start + args.batch_size, B_total)
-        coords_b = torch.stack(coords_list[start:end]).to(device)
-        dist_b = torch.stack(dist_list[start:end]).to(device)
+    if is_metric and n is None:
+        by_size: dict[int, list[int]] = {}
+        for idx in range(B_total):
+            by_size.setdefault(int(ds.metadata(idx)["n"]), []).append(idx)
+        batch_index_groups = [
+            indices[start:start + args.batch_size]
+            for size in sorted(by_size)
+            for indices in [by_size[size]]
+            for start in range(0, len(indices), args.batch_size)
+        ]
+    else:
+        batch_index_groups = [
+            list(range(start, min(start + args.batch_size, B_total)))
+            for start in range(0, B_total, args.batch_size)
+        ]
+
+    for batch_no, indices in enumerate(batch_index_groups, start=1):
+        start = indices[0]
+        end = indices[-1] + 1
+        n_batch = n if n is not None else int(ds.metadata(start)["n"])
+        root_batch = validate_root(args.root, n_batch)
+        model_roots = list(range(root_ensemble_size)) if root_ensemble_size > 0 else [root_batch]
+        if is_metric:
+            items = [ds[i] for i in indices]
+            coords_b = torch.stack([item[0] for item in items]).to(device)
+            # The network sees unit-scale costs, while all decoded/reference
+            # costs use the official integer matrix.
+            dist_b = torch.stack([item[1] for item in items]).to(device)
+            decode_dist_b = torch.stack([item[3] for item in items]).to(device=device, dtype=torch.float32)
+        else:
+            coords_b = torch.stack([coords_list[i] for i in indices]).to(device)
+            dist_b = torch.stack([dist_list[i] for i in indices]).to(device)
+            decode_dist_b = dist_b
         if device.type == "cuda":
             torch.cuda.synchronize()
         t0 = time.perf_counter()
         with torch.no_grad():
             if root_ensemble_size == 0:
                 # Preserve the established fixed-root release-decoder path.
-                coords_model, dist_model, perm = relabel_inputs_to_root_zero(coords_b, dist_b, root)
+                coords_model, dist_model, perm = relabel_inputs_to_root_zero(coords_b, dist_b, root_batch)
                 mu, _, _, aux = model(coords_model, dist_model, return_decode_aux=True)
             else:
                 mu, C_mod, diagnostics = ensemble_root_outputs(
@@ -212,9 +258,9 @@ def main() -> int:
             # from one forward.  This release evaluator has num_root_pairs=0,
             # so pair_prob is unused by every L1--L4 level.
             cand_mask = build_candidate_mask(dist_b, int(model.candidate_k))
-            C_mod = C_mod * (~torch.eye(n, device=device, dtype=torch.bool)).unsqueeze(0)
+            C_mod = C_mod * (~torch.eye(n_batch, device=device, dtype=torch.bool)).unsqueeze(0)
             pair_prob = None
-            batch_n = end - start
+            batch_n = len(indices)
             for name, value in diagnostics.items():
                 value_float = float(value.detach().item())
                 if name.endswith("_max"):
@@ -232,8 +278,8 @@ def main() -> int:
             need_gumbel = ("L3" in levels)
             t1 = time.perf_counter()
             out = decode_tours_ablation(
-                mu, C_mod, cand_mask, dist_b,
-                root=root,
+                mu, C_mod, cand_mask, decode_dist_b,
+                root=root_batch,
                 twoopt_passes=int(budget),
                 num_root_pairs=0,
                 num_gumbel_draws=int(args.num_gumbel_draws) if need_gumbel else 0,
@@ -245,7 +291,7 @@ def main() -> int:
             t_decode_total += time.perf_counter() - t1
 
             for level in levels:
-                if level in cost_by_level and np.any(np.isnan(cost_by_level[level][start:end])):
+                if level in cost_by_level and np.any(np.isnan(cost_by_level[level][indices])):
                     # Only fill in cells matching this budget (or budget-independent levels
                     # which take the first available result).
                     if (
@@ -255,14 +301,14 @@ def main() -> int:
                         or (level == "L2x100" and budget == 100)
                         or (level == "L3" and budget == needed_2opt[0])
                     ):
-                        cost_by_level[level][start:end] = _extract_cost(out, level, end - start)
+                        cost_by_level[level][indices] = _extract_cost(out, level, len(indices))
 
             if "L4" in levels and budget == needed_2opt[0]:
                 l4_draws = int(args.l4_num_draws) if int(args.l4_num_draws) > 0 else int(args.num_gumbel_draws)
                 t2 = time.perf_counter()
                 l4_out = decode_gumbel(
-                    mu, C_mod, cand_mask, dist_b,
-                    root=root,
+                    mu, C_mod, cand_mask, decode_dist_b,
+                    root=root_batch,
                     twoopt_passes=0,
                     num_draws=l4_draws,
                     gumbel_scale=float(args.gumbel_scale),
@@ -274,15 +320,17 @@ def main() -> int:
                     use_mu_repair=False,
                 )
                 t_decode_total += time.perf_counter() - t2
-                cost_by_level["L4"][start:end] = _extract_cost(l4_out, "L4", end - start)
+                cost_by_level["L4"][indices] = _extract_cost(l4_out, "L4", len(indices))
 
-        print(f"[decode]   batch {start}/{B_total} done")
+        print(f"[decode]   batch {batch_no}/{len(batch_index_groups)} (n={n_batch}) done")
 
     summaries = {l: _summarize(l, cost_by_level[l], opt_costs) for l in levels}
     output = {
         "dataset": str(Path(args.dataset).resolve()),
+        "dataset_format": "metric" if is_metric else "concorde",
         "run_dir": str(Path(args.run_dir).resolve()),
         "n": n,
+        "sizes": list(ds.sizes) if is_metric else [n],
         "root": root,
         "num_instances": B_total,
         "levels": levels,
@@ -305,7 +353,7 @@ def main() -> int:
     if root_ensemble_size > 0:
         output["root_ensemble"] = {
             "size": root_ensemble_size,
-            "model_roots": model_roots,
+            "model_roots": list(range(root_ensemble_size)) if root_ensemble_size > 0 else [root],
             "decoder_anchor_root": root,
             "c_mod_policy": "mean_restored_c_mod",
             "candidate_mask_policy": "canonical_metric_knn",
