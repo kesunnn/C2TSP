@@ -1,0 +1,85 @@
+\documentclass[10pt]{article}
+
+\usepackage{geometry}
+\geometry{a4paper, margin=0.72in}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{graphicx} % For including figures
+% NOTE: biblatex and subfig were removed -- they were loaded but unused (references are typed manually).
+\usepackage{xcolor}
+\usepackage[normalem]{ulem}
+\usepackage{hyperref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+\setlist[itemize]{leftmargin=2em}
+\setlist[enumerate]{leftmargin=2em}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\one}{\mathbf{1}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\Agg}{\operatorname{Agg}}
+\newcommand{\inner}[2]{\left\langle #1,#2 \right\rangle}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+% Rebuttal tables are numbered R1, R2, ... so that "Table 1/2/3" always refers to the submission.
+\renewcommand{\thetable}{R\arabic{table}}
+
+\title{Rebuttal C2TSP}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Answer to AC}
+
+We thank the AC and reviewers for their insightful comments. We have addressed all questions raised by the reviewers. These questions are thoughtful and constructive, prompting us to clarify important aspects of the proposed method, conduct additional experiments, and demonstrate the theoretical benefits. We believe these revisions offer stronger support for our main claims. We first summarize the three issues highlighted by the AC.
+
+\subsection{Answer to AC1}
+
+\textit{1. If the proposed method is free from downstream decoding concerns.}
+
+Like other learning-based TSP approaches, C2TSP requires a decoding procedure to convert its learned representation into a feasible tour.  \textbf{Our central claim, however, is not decoder independence. }Rather, it is that the contribution of the learned model can be distinguished from improvements introduced by downstream decoding. C2TSP learns a structurally interpretable distribution that outperforms competing learning-based TSP methods when all methods are evaluated under the same decoder settings. As shown in Table~1, C2TSP achieves the best performance in 20 of 25 comparisons, indicating that these gains cannot be attributed to a stronger decoder or more extensive post-processing. Moreover, the quality of the learned distribution can be evaluated directly through marginal-level structural metrics, as reported in Table~3 and Figure~1, without relying exclusively on the final decoded tour. Thus, our evaluation does not conflate improvements in learning with those arising from downstream decoding. Please also see our response to Reviewer 8aiS (W1) for further details.
+
+
+% All learning-based TSP methods will require repair-based decoding or post-decoding local search such as 2-opt. One of our central claim is not decoder independence. It is that C2TSP exposes a structurally interpretable learned distribution that outperforms other learning-based TSP methods under fixed decoder settings (Table~1 of the paper, where C2TSP leads in 20 of 25 cells) and can be evaluated directly through marginal-level structural metrics (Table~3 and Figure~1 of the paper). Please see our response to Reviewer 8aiS (W1) for details.
+
+
+
+\subsection{Answer to AC2}
+
+\textit{2. The presentation of the paper is unclear, which makes it difficult to understand what the algorithm is.}
+
+We appreciate the opportunity to further improve the clarity of our study, and we provide a detailed explanation of how we will improve the clarity to the specific question raised by Reviewer 8aiS. Specifically, we explain the complete C2TSP pipeline, the role of each component, and the methodological contributions in detail.
+
+In an effort to improve the clarity and make the paper more accessible to a broader audience, we will revise the camera-ready copy of the paper in three ways. First, the TSP will be formally defined at the beginning of the Methodology section. Second, we will add a pipeline figure illustrating the four stages of C2TSP to make the entire model and algorithms easy to follow. Third, the experimental components highlighted by the reviewer, including greedy degree-2 repair, LKH-3, decoder levels L1--L4, LKH-3 integration levels H0--H4, and the reported evaluation metrics, will be clearly defined at their first use.
+
+
+
+\subsection{Answer to AC3}
+
+\textit{3. Experiments are performed on randomly generated instances with Euclidean distances (Reviewer 8aiS). To elaborate, these may correspond to the ``simpler'' instances, and on which it is really not possible to make an accurate assessment of the strength of the proposed algorithm. In other words, the numerical experiments are insufficient.}
+
+We appreciate this concern and have substantially expanded the experiments to evaluate C2TSP beyond uniformly sampled Euclidean instances. Importantly, all additional experiments requested by the reviewers have now been completed. These additions strengthen the empirical evaluation and make the advantages of C2TSP more clearly evident. We thank the AC and reviewers for raising these concerns, as addressing them has improved both the completeness and the quality of the study.
+
+Specifically, we conducted a zero-shot TSPLIB evaluation using the same TSP-100 checkpoints without fine-tuning, covering 50 structured instances and 27 instances with non-Euclidean distance metrics. C2TSP achieves the best mean optimality gap in every reported decoder setting. We also added (1) no-learned-signal LKH baselines, (2) a 50-root sensitivity analysis, (3) a forward-equilibration-versus-penalty ablation, (4) training-cost accounting, and (5) multi-seed results. Together, these experiments show that the empirical advantage extends beyond uniformly sampled Euclidean instances. Importantly, the connectivity and expected-degree guarantees of the rooted 1-tree and HK layers do not rely on uniform sampling or Euclidean distances, and thus bring reliable generalizability. Please see our responses to Reviewer 8aiS (W3) and Reviewer rM5r (W2–W4, Q1–Q4) for details.
+
+\input{reviewer_GkMx}
+
+\clearpage
+\input{reviewer_rM5r}
+
+\clearpage
+\input{reviewer_8aiS}
+
+\end{document}

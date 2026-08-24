@@ -1,0 +1,64 @@
+\section{Answer to Reviewer GkMx}
+
+
+\subsection{Answer to W1}
+
+\textit{(W1) It seems that the proposed method's scope is narrow; it is specifically designed to solve the ordinary TSP because it fully utilizes the fact that a Hamiltonian tour is a rooted 1-tree with every node's degree 2. Although I think that TSP is fairly a general problem with many applications, the applicability of the proposed method to more involved problem is questionable.}
+
+\textbf{\underline{RE:}}
+\textbf{W1: Can this method be applied to problems beyond ordinary TSP?} Yes. Its relevance extends in two ways: TSP itself appears in many practical routing and sequencing problems, and the broader structure-aware pipeline may transfer to other combinatorial problems. 
+
+First, TSP is a basic model or core subproblem in many routing and sequencing applications such as delivery routing, and moreover many NP-hard problems can be reduced to TSP such as 3-SAT and machine scheduling. Our method is therefore relevant to a broad range of real-world problems. Second, we believe that our framework provides a \textbf{methodological template} for structure-aware learning: identify a tractable combinatorial structure that enforces a key property of feasible solutions, use it as the latent support, and design problem-specific mechanisms to address the remaining gaps. The current rooted 1-tree construction is specific to TSP. However, the same structure-aware pipeline may be useful for other combinatorial problems when an appropriate tractable structure can be identified.
+
+
+\subsection{Answer to W2}
+
+\textit{(W2) Another comment stems from the experimental result in connecting the proposed method (and other baselines) to LKH-3. As far as I understand, the primal purpose of this experiment is to show that the proposed method can maintain near-tour marginal. While I think this is confirmed through this experiment, at first impression Table 2 looks like: ``we cannot beat vanilla LKH-3 even with the proposed method.'' Thus, it is recommended that the purpose of the experiment is clearly stated before explaining the experimental results.}
+
+\textbf{\underline{RE:}}
+\textbf{State the purpose of LKH-3 experiments}. We thank the reviewer for this suggestion: the experiment is designed to test whether the learned object maintains near-tour structure, and we take this opportunity to make the purpose of Table 2 explicit. We will state this purpose at the beginning of the Experiments section.
+
+% \textbf{Purpose.} The goal is not to outperform vanilla LKH-3. LKH-3 serves as a stress test contrasting two learning paradigms: learning a globally connected distribution and leaving only local degree defects to repair (C2TSP), versus learning local edge preferences and deferring global structure to search (heatmap-based methods). Since LKH-3 itself is a local-repair procedure ($K$-opt sweeps), the deeper the learned signal drives LKH-3's machinery ($H1\rightarrow H4$), the more any structural inconsistency in the representation is amplified, which is precisely what happens to the heatmap-based methods. Under this purpose, Table 2 shows that C2TSP is the only learned model that survives deep integration: at $H2 \rightarrow H4$, all heatmap baselines degrade LKH-3 by one to three orders of magnitude for $n\geq 500$, whereas C2TSP stays within $\sim\!1$\,\textpertenthousand~of vanilla at every size. 
+
+
+\subsection{Answer to M1}
+
+\textit{(M1) Lemma 2.1: ``Consequently, ... computable exactly.'' is a bit informal statement, because even the exact Hamiltonian Gibbs can be exactly computed if we can take exponential time. Is it computable in polynomial time?}
+
+\textbf{\underline{RE:}}
+\textbf{Is the rooted 1-tree Gibbs family computable in polynomial time?}
+Yes. We agree that ``computable exactly'' is imprecise and will revise it to ``computable exactly in polynomial time'' in this revision.
+
+In detail, for the fixed-root rooted 1-tree Gibbs family, the partition function factorizes into a weighted spanning-tree partition function and a root-edge-pair normalizer. It can be evaluated in \(O(n^3)\) time on a dense graph. The edge marginals, expected degrees, and degree variances and covariances required in this work are also computable exactly in polynomial time from the same factorization.
+
+\subsection{Answer to M2}
+
+\textit{(M2) Equation (5): $d_i(U)$ seems never defined before; guess that it is the degree of vertex $i$ on subgraph $U$, isn't it? Please define the symbol before use.}
+
+\textbf{\underline{RE:}}
+\(d_i(U)\) denotes the degree of node \(i\) in the rooted 1-tree \(U\). In this revision, we will define this notation in the paragraph before Eq.~(2).
+
+\subsection{Answer to M3}
+
+\textit{(M3) There are some missing parentheses in referring to an equation; e.g., line 135 ``following 6'', line 176 ``function 16'', line 187 ``Eq. 17'', and line 189 ``marginal derivative 17''.}
+
+\textbf{\underline{RE:}}
+We will add the missing parentheses in these four places, and we will check every equation reference in the manuscript.
+
+\subsection{Answer to M4}
+
+\textit{(M4) LKH-3 in line 208 may need citation; please see \url{http://webhotel4.ruc.dk/~keld/research/LKH-3/}(\url{http://webhotel4.ruc.dk/~keld/research/LKH-3/})}
+
+\textbf{\underline{RE:}}
+We will cite LKH-3 at its first appearance.
+
+
+\subsection{Answer to Q1}
+
+\textit{(Q1) Regarding (W1), can the proposed method, or more broadly the ideas behind the proposed method (rooted 1-tree marginal or the pipeline), be applied to other problems or other TSP variants?}
+
+
+\textbf{\underline{RE:}}
+Yes. Our method can be applied to problems that use TSP as a basic model or core subproblem. More broadly, other combinatorial problems may follow our methodological template when an appropriate tractable structural family can be identified. Please refer to our response to W1 for details.
+% Please refer to our response to W1. In short, the broader idea provides a methodological template for other problems when an appropriate tractable structural family can be identified.
+

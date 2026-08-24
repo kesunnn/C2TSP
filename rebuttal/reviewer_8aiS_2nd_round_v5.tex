@@ -1,0 +1,90 @@
+\subsection{Second Round}
+\textit{Thank you for your response. I have a follow-up question regarding the added experiment using TSPLIB.}
+
+\textit{I agree that the experiment using TSPLIB will alleviate the concern that the experiments were based on (nicely behaved) random instances. However, I respectfully disagree that TSPLIB resolves the concern that the instances are Euclidean.}
+
+\textit{TSPLIB instances, even when not Euclidean, are often "almost" Euclidean. Some instances are geographical instances, which deviates from 2D Euclidean case only as much as affected by the curvature of the Earth. Some instances are simply differently rounded versions of Euclidean distances. While there exist instances where all distances are given explicitly (so-called MATRIX instances), but they only take a small fraction of the entire benchmark, and again, some of them are still geographical data (and therefore nearly Euclidean), given in the MATRIX form.}
+
+\textit{There are few instances that are "truly" non-Euclidean, but they take a very small fraction among all instances of TSPLIB, so experiments based on those few instances would not sufficiently reflect the behavior of the proposed method, and moreover, aggregated statics would fail to show the performance for those few non-Euclidean instances (as most instances are Euclidean or nearly Euclidean).}
+
+\textit{I also have another question, out of curiosity: why only data with $<$ 1000 nodes? As the authors have already pointed out, optima for many instances in TSPLIB are already known and therefore one does not need to calculate them, which I assume to be the most time-consuming part that could have prevented larger instances from being used.}
+
+We thank the reviewer for the careful follow-up. In response, we added zero-shot experiments on two metric non-Euclidean datasets using the same TSP-100 checkpoints. The non-Euclideanity analysis shows that new datasets deviate substantially more from Euclidean geometry than the non-Euclidean TSPLIB instances considered in our previous response. 
+The experimental results show that \textbf{C2TSP remains effective} and outperforms every learned baseline by a wide margin on both datasets. This advantage is consistent with C2TSP's edge-based representation and algorithmic components. We will also add these results to the appendix.
+
+
+\textbf{Non-Euclidean benchmarks:}
+
+\begin{itemize}
+    \item \textbf{Dataset A (graph shortest-path metric) $^{[1,2]}$.} We sample nodes uniformly from $[0,1]^2$, retain a sparse Erd\H{o}s--R\'enyi subset of edges, and assign each retained edge its Euclidean length. The complete target cost matrix is then defined by the weighted shortest-path distances between all pairs of nodes in the sparse graph. Detours around missing edges make the resulting metric non-Euclidean.
+
+    \item \textbf{Dataset B (Hamiltonian-cycle $1$--$2$ metric) $^{[3]}$.} We take the Flinders Hamiltonian-cycle graphs and set cost 1 on the edges of each source graph and cost 2 elsewhere. These instances have no coordinates at all. Every source graph is Hamiltonian, so the exact optimum is exactly $n$. 
+    
+    % We evaluate 37 of the 45 instances with $n\leq 1000$ that fit in GPU memory.
+\end{itemize}
+
+\textbf{Quantifying non-Euclideanity.} We use a spectral non-Euclideanity score based on Gower's criterion$^{[4]}$: the score is zero for Euclidean distances, and larger values indicate stronger deviations from Euclidean geometry. 
+TSPLIB's \textsc{geo}, \textsc{att}, and rounded \textsc{euc\_2d} instances score in $0.001$--$0.009$, confirming the reviewer's point that they are nearly Euclidean. Dataset A scores 0.27--0.40 and Dataset B scores 0.10--0.28. Significantly higher scores of both datasets support their use as non-Euclidean benchmarks.
+
+
+\textbf{Setup.} All methods use the same decoder setting (L2$\times$100). The four baselines take coordinates as input: on Dataset A they receive the original node coordinates, and on Dataset B they receive a metric MDS embedding of the target matrix$^{[5]}$ (because these baselines support only coordinate-based input). C2TSP takes the cost matrix directly. 
+
+
+\begin{table}[h]
+\centering
+\caption{\textbf{Dataset A: graph shortest-path metric.} Cells report the mean optimality gap (\%) $\pm$ standard deviation across instances, and the per-instance wall time in seconds (in parentheses). 
+% Gaps are measured against exact Concorde optima for $n\leq 500$ and fixed-seed LKH-3 reference tours for $n=1000^\dagger$.
+}
+\label{tab:dataset-a}
+\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lrrrr}
+\toprule
+Method & $n=100$ & $n=200$ & $n=500$ & $n=1000$  \\
+\midrule
+\textbf{C2TSP} & 1.41 $\pm$ 0.63 (0.0) & 1.52 $\pm$ 0.47 (0.1) & 1.93 $\pm$ 0.42 (0.3) & 2.05 $\pm$ 0.22 (2.0)  \\
+DIFUSCO & 8.03 $\pm$ 2.21 (0.3) & 20.56 $\pm$ 2.34 (0.7) & 108.84 $\pm$ 4.95 (5.7) & 185.14 $\pm$ 5.12 (15.9) \\
+Fast-T2T & 7.67 $\pm$ 2.04 (0.0) & 20.51 $\pm$ 2.55 (0.0) & 108.06 $\pm$ 4.91 (0.2) & 184.33 $\pm$ 5.60 (0.5)  \\
+DIMES & 7.14 $\pm$ 2.29 (0.0) & 20.39 $\pm$ 2.21 (0.0) & 107.67 $\pm$ 5.72 (0.0) & 184.31 $\pm$ 5.90 (0.2)  \\
+UTSP & 7.31 $\pm$ 1.68 (0.0) & 20.39 $\pm$ 2.80 (0.0) & 107.97 $\pm$ 4.63 (0.0) & 184.19 $\pm$ 5.29 (0.1)  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{\textbf{Dataset B: Hamiltonian-cycle $1$--$2$ metric.} The exact optimum is $n$ for every instance.}
+\label{tab:dataset-b}
+\small
+\setlength{\tabcolsep}{7pt}
+\begin{tabular}{lrrr}
+\toprule
+Method & $3$-regular & sparse & dense \\
+ & \footnotesize(24 inst.) & \footnotesize(9 inst.) & \footnotesize(4 inst.) \\
+% \midrule
+% \emph{random tour} & 99.2 & 99.0 & 49.6 \\
+\midrule
+\textbf{C2TSP} & 3.56 $\pm$ 3.24 (6.3) & 4.20 $\pm$ 0.79 (3.9) & 0.60 $\pm$ 0.40 (0.6) \\
+DIFUSCO & 63.80 $\pm$ 32.78 (17.1) & 66.53 $\pm$ 25.92 (8.6) & 18.71 $\pm$ 6.86 (2.1) \\
+Fast-T2T & 62.05 $\pm$ 32.67 (0.5) & 62.43 $\pm$ 25.36 (0.3) & 18.59 $\pm$ 8.36 (0.1) \\
+DIMES & 59.46 $\pm$ 32.56 (0.2) & 59.36 $\pm$ 24.57 (0.1) & 18.82 $\pm$ 7.24 (0.0) \\
+UTSP & 61.16 $\pm$ 32.71 (0.1) & 61.52 $\pm$ 24.83 (0.1) & 15.84 $\pm$ 8.95 (0.0) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Conclusion.} C2TSP remains effective on non-Euclidean instances: its gap stays at the few-percent level (1.4--2.1\% on Dataset A; 0.6--4.2\% on Dataset B), and outperforms every baseline. This advantage is consistent with the model design: a non-Euclidean target cost matrix cannot generally be recovered exactly from coordinates, whereas C2TSP's rooted 1-tree family and HK equilibration operate directly on the cost matrix.
+
+\textbf{Limitation to graphs with $n\le1000$.}  Regarding the reviewer's additional question about the limitation to graphs with at most $n=1000$ nodes, there are two reasons. First, evaluation up to $n=1000$ follows the standard practice used in related studies, including Fast-T2T and UTSP. Second, although methods such as DIFUSCO and DIMES have reported results on larger instances, some baseline implementations like DIFUSCO encounter out-of-memory errors in our evaluation environment, as also reflected in Table~2 of the manuscript. Extending all baseline implementations to larger instances through memory optimization is beyond the scope of this study.
+
+\textbf{Reference}
+
+$[1]$ Bringmann, Karl, et al. ``Random Shortest Paths: Non-Euclidean Instances for Metric Optimization Problems.''
+
+$[2]$ Klootwijk, Stefan, et al. ``Probabilistic Analysis of Optimization Problems on Generalized Random Shortest Path Metrics.''
+
+$[3]$ Baniasadi, Pouya, et al. ``A New Benchmark Set for Traveling Salesman Problem and Hamiltonian Cycle Problem.''
+
+$[4]$ Gower, John C. ``Some Distance Properties of Latent Root and Vector Methods Used in Multivariate Analysis.''
+
+$[5]$ De Leeuw, Jan. ``Applications of convex analysis to multidimensional scaling.''
