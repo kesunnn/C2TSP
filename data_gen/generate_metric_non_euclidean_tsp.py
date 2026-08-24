@@ -436,8 +436,9 @@ def _parse_hcp_edges(path: Path) -> tuple[int, np.ndarray]:
 def generate_hcp_dataset(args: argparse.Namespace) -> None:
     source_dir = Path(args.hcp_dir).expanduser().resolve()
     files = sorted(path for path in source_dir.iterdir() if path.is_file())
-    if args.max_n is not None:
-        files = [path for path in files if _parse_hcp_edges(path)[0] <= int(args.max_n)]
+    max_n = getattr(args, "max_n", None)
+    if max_n is not None:
+        files = [path for path in files if _parse_hcp_edges(path)[0] <= int(max_n)]
     if len(files) != int(args.expected_instances):
         raise ValueError(
             f"Expected {args.expected_instances} HCP files in {source_dir}, found {len(files)}"

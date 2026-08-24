@@ -164,15 +164,25 @@ def _subtree_preorder_excluding_backbone(
     parent: int,
     backbone_set: set[int],
 ) -> list[int]:
-    order = [int(node)]
-    children = [
-        int(v)
-        for v in np.flatnonzero(adj[node]).astype(int).tolist()
-        if int(v) != int(parent) and int(v) not in backbone_set
-    ]
-    children.sort(key=lambda v: (float(C_mod[node, v]), int(v)))
-    for child in children:
-        order.extend(_subtree_preorder_excluding_backbone(adj, C_mod, child, node, backbone_set))
+    """Iterative preorder, preserving the former recursive DFS order.
+
+    Deep MAP trees can contain paths longer than Python's recursion limit.  A
+    stack avoids that size-dependent failure.  Children are pushed in reverse
+    sorted order so popping visits them in exactly the same order as the former
+    recursive implementation.
+    """
+    order: list[int] = []
+    stack: list[tuple[int, int]] = [(int(node), int(parent))]
+    while stack:
+        current, current_parent = stack.pop()
+        order.append(current)
+        children = [
+            int(v)
+            for v in np.flatnonzero(adj[current]).astype(int).tolist()
+            if int(v) != current_parent and int(v) not in backbone_set
+        ]
+        children.sort(key=lambda v: (float(C_mod[current, v]), int(v)))
+        stack.extend((child, current) for child in reversed(children))
     return order
 
 
